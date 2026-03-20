@@ -1,0 +1,30 @@
+[package]
+name = "rust-blog-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.8.4", features = ["macros"] }
+tower = "0.5.2"
+tower-http = { version = "0.6.6", features = ["cors", "trace"] }
+
+# 非同步運行時
+tokio = { version = "1.0", features = ["full"] }
+
+# JSON 處理 - 個人部落格必備
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dotenvy = "0.15"
+# OpenAPI / Swagger UI
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
+
+# 日期時間 - 文章發布時間
+chrono = { version = "0.4", features = ["serde"] }
+
+# 簡單的日誌
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# 錯誤處理 - 讓個人維護更輕鬆
+thiserror = "2.0.16"
