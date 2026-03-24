@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: personal_blog
+      POSTGRES_USER: blog_user
+      POSTGRES_PASSWORD: blog_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - type: bind
+        source: /mnt/c/Users/Jake/Workspace/blog/blog-backend/initdb
+        target: /docker-entrypoint-initdb.d
+    command: >
+      postgres
+      -c log_statement=all
+      -c log_min_duration_statement=0
+      -c shared_preload_libraries=pg_stat_statements
+
+volumes:
+  postgres_data:
