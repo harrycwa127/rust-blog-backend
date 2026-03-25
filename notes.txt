@@ -1,0 +1,11 @@
+# start docker db
+docker-compose -f docker-compose.dev.yml up -d
+
+# 設定環境變數
+export DATABASE_URL="postgres://blog_user:blog_password@localhost:5432/personal_blog"
+
+# 執行遷移
+sea-orm-cli migrate up
+
+# 檢查遷移狀態
+sea-orm-cli migrate status
