@@ -2,10 +2,12 @@ mod app;
 mod config;
 mod database;
 mod docs;
+mod dtos;
 mod entities;
 mod error;
 mod middleware;
 mod routes;
+mod services;
 mod startup;
 mod state;
 

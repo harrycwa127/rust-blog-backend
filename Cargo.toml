@@ -46,3 +46,11 @@ sea-orm = { version = "1.1.4", features = [
 
 
 sea-orm-migration = "1.1.4"
+
+# 資料驗證 - 確保輸入品質
+validator = { version = "0.20", features = ["derive"] }
+# Slug 生成 - 友善的 URL
+slug = "0.1"
+html2text = "0.16.7"
+pulldown-cmark = "0.13.3"
+log = "0.4.29"

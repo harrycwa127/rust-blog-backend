@@ -1,4 +1,4 @@
-use sea_orm::{Database, DatabaseConnection, DbErr};
+use sea_orm::{Database, DatabaseConnection, DbErr, ConnectionTrait};
 use tracing::info;
 
 use crate::config::Config;
