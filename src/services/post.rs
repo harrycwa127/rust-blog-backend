@@ -1,6 +1,7 @@
 use crate::dtos::post::*;
 use crate::entities::{post, tag, post_tag};
 use crate::error::AppError;
+use migration::Expr;
 use sea_orm::*;
 use std::collections::HashMap;
 use validator::Validate;
@@ -232,5 +233,295 @@ impl PostService {
         ];
         let index = tag_name.len() % colors.len();
         colors[index].to_string()
+    }
+
+    /// 根據 slug 或 id 取得單篇文章詳情
+    pub async fn get_post_by_slug_or_id(
+        db: &DatabaseConnection,
+        identifier: &str,
+    ) -> Result<PostDetailResponse, AppError> {
+        // 嘗試解析為數字 ID，否則當作 slug 處理
+        let post = if let Ok(id) = identifier.parse::<i32>() {
+            post::Entity::find_by_id(id).one(db).await?
+        } else {
+            post::Entity::find()
+                .filter(post::Column::Slug.eq(identifier))
+                .one(db)
+                .await?
+        };
+
+        let post = match post {
+            Some(p) => p,
+            None => return Err(AppError::NotFound("文章不存在".to_string())),
+        };
+
+        // 只有已發布的文章才允許公開查看
+        if !post.is_published {
+            return Err(AppError::NotFound("文章不存在".to_string()));
+        }
+
+        // 取得標籤
+        let tags = Self::get_tags_for_post(db, post.id).await?;
+
+        Ok(PostDetailResponse {
+            id: post.id,
+            title: post.title,
+            content: post.content,
+            excerpt: post.excerpt,
+            slug: post.slug,
+            is_published: post.is_published,
+            view_count: post.view_count,
+            created_at: post.created_at,
+            updated_at: post.updated_at,
+            published_at: post.published_at,
+            tags,
+        })
+    }
+
+    /// 管理員取得文章詳情（包含草稿）
+    pub async fn get_post_for_admin(
+        db: &DatabaseConnection,
+        post_id: i32,
+    ) -> Result<PostDetailResponse, AppError> {
+        let post = post::Entity::find_by_id(post_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("文章不存在".to_string()))?;
+
+        let tags = Self::get_tags_for_post(db, post.id).await?;
+
+        Ok(PostDetailResponse {
+            id: post.id,
+            title: post.title,
+            content: post.content,
+            excerpt: post.excerpt,
+            slug: post.slug,
+            is_published: post.is_published,
+            view_count: post.view_count,
+            created_at: post.created_at,
+            updated_at: post.updated_at,
+            published_at: post.published_at,
+            tags,
+        })
+    }
+
+    /// 更新文章
+    pub async fn update_post(
+        db: &DatabaseConnection,
+        post_id: i32,
+        req: UpdatePostRequest,
+    ) -> Result<PostDetailResponse, AppError> {
+        // 檢查文章是否存在
+        let existing_post = post::Entity::find_by_id(post_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("文章不存在".to_string()))?;
+
+        // 保存發布狀態，避免移動後無法訪問
+        let was_published = existing_post.is_published;
+
+        let now = chrono::Utc::now();
+        let mut updated_post: post::ActiveModel = existing_post.into();
+
+        // 只更新有提供的欄位
+        if let Some(title) = req.title {
+            updated_post.title = Set(title);
+        }
+
+        if let Some(content) = req.content {
+            // 如果內容有更新，可能需要重新生成摘要
+            let excerpt = req.excerpt.unwrap_or_else(|| {
+                Self::generate_excerpt(&content)
+            });
+            updated_post.content = Set(content);
+            updated_post.excerpt = Set(Some(excerpt));
+        } else if let Some(excerpt) = req.excerpt {
+            updated_post.excerpt = Set(Some(excerpt));
+        }
+
+        if let Some(slug) = req.slug {
+            // 檢查 slug 是否與其他文章衝突
+            if let Some(_conflict) = post::Entity::find()
+                .filter(post::Column::Slug.eq(&slug))
+                .filter(post::Column::Id.ne(post_id))
+                .one(db)
+                .await?
+            {
+                return Err(AppError::ConflictError(format!("Slug '{}' 已被使用", slug)));
+            }
+            updated_post.slug = Set(slug);
+        }
+
+        // 處理發布狀態變更
+        if let Some(is_published) = req.is_published {
+            updated_post.is_published = Set(is_published);
+
+            // 如果從草稿變為發布，設定發布時間
+            if is_published && !was_published {
+                updated_post.published_at = Set(Some(now));
+                info!("文章 {} 已發布", post_id);
+            }
+            // 如果從發布變為草稿，清除發布時間
+            else if !is_published && was_published {
+                updated_post.published_at = Set(None);
+                info!("文章 {} 已撤回發布", post_id);
+            }
+        }
+
+        updated_post.updated_at = Set(now);
+
+        // 開始交易
+        let txn = db.begin().await?;
+
+        // 更新文章
+        let updated = updated_post.update(&txn).await.map_err(|e| {
+            error!("更新文章失敗: {e:#?}");
+            AppError::from(e)
+        })?;
+
+        // 更新標籤關聯
+        if let Some(tags) = req.tags {
+            // 刪除現有標籤關聯
+            post_tag::Entity::delete_many()
+                .filter(post_tag::Column::PostId.eq(post_id))
+                .exec(&txn)
+                .await?;
+
+            // 重新建立標籤關聯
+            for tag_name in tags {
+                let name = tag_name.trim();
+                if name.is_empty() { continue; }
+
+                Self::create_or_update_tag_txn(&txn, name, post_id).await?;
+            }
+        }
+
+        txn.commit().await?;
+
+        // 重新取得標籤資料
+        let tags = Self::get_tags_for_post(db, updated.id).await?;
+
+        Ok(PostDetailResponse {
+            id: updated.id,
+            title: updated.title,
+            content: updated.content,
+            excerpt: updated.excerpt,
+            slug: updated.slug,
+            is_published: updated.is_published,
+            view_count: updated.view_count,
+            created_at: updated.created_at,
+            updated_at: updated.updated_at,
+            published_at: updated.published_at,
+            tags,
+        })
+    }
+
+    /// 刪除文章（軟刪除，實際上是設為草稿並隱藏）
+    pub async fn delete_post(
+        db: &DatabaseConnection,
+        post_id: i32,
+    ) -> Result<DeletePostResponse, AppError> {
+        let post = post::Entity::find_by_id(post_id)
+            .one(db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("文章不存在".to_string()))?;
+
+        // 開始交易
+        let txn = db.begin().await?;
+
+        // 刪除標籤關聯
+        post_tag::Entity::delete_many()
+            .filter(post_tag::Column::PostId.eq(post_id))
+            .exec(&txn)
+            .await?;
+
+        // 刪除文章
+        post::Entity::delete_by_id(post_id)
+            .exec(&txn)
+            .await?;
+
+        txn.commit().await?;
+
+        info!("文章 {} '{}' 已被刪除", post_id, post.title);
+
+        Ok(DeletePostResponse {
+            success: true,
+            message: "文章已成功刪除".to_string(),
+            deleted_id: post_id,
+        })
+    }
+
+    /// 增加文章瀏覽次數
+    pub async fn increment_view_count(
+        db: &DatabaseConnection,
+        post_id: i32,
+    ) -> Result<(), AppError> {
+        post::Entity::update_many()
+            .col_expr(post::Column::ViewCount, Expr::add(Expr::col(post::Column::ViewCount), 1))
+            .filter(post::Column::Id.eq(post_id))
+            .exec(db)
+            .await?;
+
+        Ok(())
+    }
+
+    /// 取得單篇文章的標籤
+    async fn get_tags_for_post(
+        db: &DatabaseConnection,
+        post_id: i32,
+    ) -> Result<Vec<String>, AppError> {
+        let results = post_tag::Entity::find()
+            .filter(post_tag::Column::PostId.eq(post_id))
+            .find_also_related(tag::Entity)
+            .all(db)
+            .await?;
+
+        let tags = results
+            .into_iter()
+            .filter_map(|(_, tag)| tag.map(|t| t.name))
+            .collect();
+
+        Ok(tags)
+    }
+
+    /// 在交易中建立或更新標籤
+    async fn create_or_update_tag_txn(
+        txn: &DatabaseTransaction,
+        tag_name: &str,
+        post_id: i32,
+    ) -> Result<(), AppError> {
+        // 查找或建立標籤
+        let tag_entity = match tag::Entity::find()
+            .filter(tag::Column::Name.eq(tag_name))
+            .one(txn)
+            .await?
+        {
+            Some(existing_tag) => {
+                // 更新文章計數
+                let mut active_tag: tag::ActiveModel = existing_tag.into();
+                active_tag.post_count = Set(active_tag.post_count.unwrap() + 1);
+                active_tag.update(txn).await?
+            }
+            None => {
+                // 建立新標籤
+                let new_tag = tag::ActiveModel {
+                    name: Set(tag_name.to_string()),
+                    color: Set(Self::generate_tag_color(tag_name)),
+                    post_count: Set(1),
+                    ..Default::default()
+                };
+                new_tag.insert(txn).await?
+            }
+        };
+
+        // 建立文章-標籤關聯
+        let post_tag_relation = post_tag::ActiveModel {
+            post_id: Set(post_id),
+            tag_id: Set(tag_entity.id),
+            ..Default::default()
+        };
+        post_tag_relation.insert(txn).await?;
+
+        Ok(())
     }
 }

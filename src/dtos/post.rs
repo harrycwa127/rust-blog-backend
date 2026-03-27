@@ -97,3 +97,75 @@ pub struct PostListQuery {
     #[schema(example = "rust")]
     pub tag: Option<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Validate)]
+pub struct UpdatePostRequest {
+    #[validate(length(min = 1, max = 255, message = "標題長度必須在 1-255 字元之間"))]
+    #[schema(example = "更新後的文章標題")]
+    pub title: Option<String>,
+
+    #[validate(length(min = 1, message = "內容不能為空"))]
+    #[schema(example = "更新後的文章內容...")]
+    pub content: Option<String>,
+
+    #[validate(length(max = 500, message = "摘要不能超過 500 字元"))]
+    #[schema(example = "更新後的摘要")]
+    pub excerpt: Option<String>,
+
+    #[schema(example = "updated-article-slug")]
+    pub slug: Option<String>,
+
+    #[schema(example = true)]
+    pub is_published: Option<bool>,
+
+    #[schema(example = json!(["rust", "更新", "程式設計"]))]
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct PostDetailResponse {
+    #[schema(example = 1)]
+    pub id: i32,
+
+    #[schema(example = "我的第一篇 Rust 文章")]
+    pub title: String,
+
+    #[schema(example = "# 開始學習 Rust\n\n今天開始我的 Rust 學習之旅...")]
+    pub content: String,
+
+    #[schema(example = "這篇文章分享我學習 Rust 的心得")]
+    pub excerpt: Option<String>,
+
+    #[schema(example = "my-first-rust-article")]
+    pub slug: String,
+
+    #[schema(example = true)]
+    pub is_published: bool,
+
+    #[schema(example = 128)]
+    pub view_count: i32,
+
+    #[schema(value_type = String, example = "2024-01-15T10:30:00Z")]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+
+    #[schema(value_type = String, example = "2024-01-15T15:45:00Z")]
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+
+    #[schema(value_type = Option<String>, example = "2024-01-15T12:00:00Z")]
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+
+    #[schema(example = json!(["rust", "程式設計", "學習心得"]))]
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DeletePostResponse {
+    #[schema(example = true)]
+    pub success: bool,
+
+    #[schema(example = "文章已成功刪除")]
+    pub message: String,
+
+    #[schema(example = 1)]
+    pub deleted_id: i32,
+}

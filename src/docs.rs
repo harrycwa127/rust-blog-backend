@@ -1,22 +1,28 @@
-use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
-use utoipa::{Modify, OpenApi};
+use utoipa::{Modify, OpenApi, openapi::security::{ApiKey, ApiKeyValue, SecurityScheme}};
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
         crate::routes::health::health_check,
         crate::routes::blog::blog_info,
-        crate::routes::get_posts,
-        crate::routes::create_post,
+        crate::routes::posts::get_posts,
+        crate::routes::posts::get_post_by_slug,
+        crate::routes::posts::create_post,
+        crate::routes::posts::get_post_for_admin,
+        crate::routes::posts::update_post,
+        crate::routes::posts::delete_post,
     ),
     components(
         schemas(
             crate::routes::health::HealthCheck,
             crate::routes::blog::BlogInfo,
-            crate::dtos::post::CreatePostRequest,
-            crate::dtos::post::PostResponse,
-            crate::dtos::post::PostListResponse,
-            crate::dtos::post::PostListQuery,
+            crate::dtos::CreatePostRequest,
+            crate::dtos::UpdatePostRequest,
+            crate::dtos::PostResponse,
+            crate::dtos::PostDetailResponse,
+            crate::dtos::PostListResponse,
+            crate::dtos::DeletePostResponse,
+            crate::dtos::PostListQuery,
         )
     ),
     tags(
