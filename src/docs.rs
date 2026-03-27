@@ -1,4 +1,6 @@
-use utoipa::OpenApi;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
+use utoipa::{Modify, OpenApi};
+
 
 #[derive(OpenApi)]
 #[openapi(
@@ -25,6 +27,13 @@ use utoipa::OpenApi;
         crate::routes::tags::update_tag,
         crate::routes::tags::delete_tag,
         crate::routes::tags::get_tag_suggestions,
+
+        // Comment
+        crate::routes::comments::get_comments,
+        crate::routes::comments::create_comment,
+        crate::routes::comments::get_admin_comments,
+        crate::routes::comments::update_comment_status,
+        crate::routes::comments::delete_comment,
     ),
     components(
         schemas(
@@ -51,6 +60,13 @@ use utoipa::OpenApi;
             crate::dtos::DeleteTagResponse,
             crate::dtos::TagListQuery,
             crate::dtos::TagSuggestionResponse,
+
+            // Comment
+            crate::dtos::CreateCommentRequest,
+            crate::dtos::CommentResponse,
+            crate::dtos::CommentListQuery,
+            crate::dtos::UpdateCommentStatusRequest,
+            crate::dtos::CommentModerationResponse,
         )
     ),
     tags(
@@ -58,7 +74,8 @@ use utoipa::OpenApi;
         (name = "blog", description = "部落格基本資訊 API"),
         (name = "posts", description = "文章相關 API"),
         (name = "tags", description = "標籤相關 API"), // 🆕
-        (name = "admin", description = "管理員 API")
+        (name = "admin", description = "管理員 API"),
+        (name = "comments", description = "留言相關 API"),
     )
 )]
 pub struct ApiDoc;
