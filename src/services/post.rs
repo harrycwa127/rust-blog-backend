@@ -524,4 +524,66 @@ impl PostService {
 
         Ok(())
     }
+
+    /// 更新文章時同步更新標籤計數
+    async fn sync_tag_counts_for_post(
+        txn: &DatabaseTransaction,
+        post_id: i32,
+        old_tags: Vec<String>,
+        new_tags: Vec<String>,
+    ) -> Result<(), AppError> {
+        use crate::services::TagService;
+        
+        // 找出被移除的標籤
+        let removed_tags: Vec<_> = old_tags.iter()
+            .filter(|tag| !new_tags.contains(tag))
+            .collect();
+
+        // 找出新增的標籤
+        let added_tags: Vec<_> = new_tags.iter()
+            .filter(|tag| !old_tags.contains(tag))
+            .collect();
+
+        // 更新所有受影響標籤的計數
+        let mut affected_tag_ids = Vec::new();
+
+        // 取得被移除標籤的 ID
+        if !removed_tags.is_empty() {
+            let removed_tag_entities = tag::Entity::find()
+                .filter(tag::Column::Name.is_in(removed_tags))
+                .all(txn)
+                .await?;
+            affected_tag_ids.extend(removed_tag_entities.iter().map(|t| t.id));
+        }
+
+        // 取得新增標籤的 ID
+        if !added_tags.is_empty() {
+            let added_tag_entities = tag::Entity::find()
+                .filter(tag::Column::Name.is_in(added_tags))
+                .all(txn)
+                .await?;
+            affected_tag_ids.extend(added_tag_entities.iter().map(|t| t.id));
+        }
+
+        // 更新所有受影響標籤的文章計數
+        for tag_id in affected_tag_ids {
+            let count = post_tag::Entity::find()
+                .filter(post_tag::Column::TagId.eq(tag_id))
+                .inner_join(post::Entity)
+                .filter(post::Column::IsPublished.eq(true))
+                .count(txn)
+                .await?;
+
+            tag::Entity::update_many()
+                .col_expr(tag::Column::PostCount, Expr::value(count as i32))
+                .filter(tag::Column::Id.eq(tag_id))
+                .exec(txn)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    // 在 update_post、delete_post、create 方法中調用標籤計數同步
+    // 你需要在更新文章標籤前後記錄標籤變化，然後調用 sync_tag_counts_for_post
 }

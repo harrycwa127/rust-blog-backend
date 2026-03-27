@@ -1,8 +1,13 @@
-use axum::{extract::State, Json};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{database, state::AppState};
+
+pub fn create_health_routes() -> Router<AppState> {
+    Router::new()
+        .route("/health", get(health_check))
+}
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct HealthCheck {

@@ -27,7 +27,7 @@ pub fn build_app(app_state: AppState) -> Router {
             .allow_headers(Any)
     };
 
-    let api = routes::router().with_state(app_state);
+    let api = routes::create_routes().with_state(app_state);
 
     Router::new()
         .merge(api)

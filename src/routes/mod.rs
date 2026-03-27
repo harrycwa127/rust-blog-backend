@@ -1,18 +1,15 @@
 pub mod health;
 pub mod blog;
 pub mod posts;
+pub mod tags; // 新增
 
-use axum::{
-    routing::{get, post},
-    Router,
-};
+use axum::Router;
 use crate::state::AppState;
-use posts::create_post_routes;
 
-/// 建立完整路由
-pub fn router() -> Router<AppState> {
+pub fn create_routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(blog::blog_info))
-        .route("/health", get(health::health_check))
-        .nest("/api", create_post_routes())
+        .merge(health::create_health_routes())
+        .merge(blog::create_blog_routes())
+        .merge(posts::create_post_routes())
+        .merge(tags::create_tag_routes()) // 新增
 }

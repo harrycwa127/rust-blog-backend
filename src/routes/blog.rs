@@ -1,8 +1,13 @@
-use axum::{extract::State, Json};
+use axum::{Json, Router, extract::State, routing::get};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::state::AppState;
+
+pub fn create_blog_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(blog_info))
+}
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct BlogInfo {

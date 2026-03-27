@@ -10,6 +10,7 @@ mod routes;
 mod services;
 mod startup;
 mod state;
+mod utils;
 
 use anyhow::Result;
 use config::Config;
