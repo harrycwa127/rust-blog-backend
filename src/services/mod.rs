@@ -1,5 +1,7 @@
-pub mod post;
-pub mod tag; // 新增
+pub mod post_service;
+pub mod tag_service;
+pub mod comment_service;
 
-pub use post::PostService;
-pub use tag::TagService; // 新增
+pub use post_service::PostService;
+pub use tag_service::TagService;
+pub use comment_service::CommentService;

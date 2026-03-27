@@ -1,5 +1,7 @@
 pub mod post;
-pub mod tag; // 新增
+pub mod tag;
+pub mod comment;
 
 pub use post::*;
-pub use tag::*; // 新增
+pub use tag::*;
+pub use comment::*;
