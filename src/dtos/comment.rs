@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use validator::Validate;
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Validate)]
@@ -47,7 +47,7 @@ pub struct CommentResponse {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, IntoParams)]
 pub struct CommentListQuery {
     #[schema(example = 1)]
     pub page: Option<u64>,
