@@ -48,7 +48,7 @@ pub struct UpdateTagRequest {
     pub color: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct TagResponse {
     #[schema(example = 1)]
     pub id: i32,

@@ -15,6 +15,26 @@ use crate::{
 pub struct TagService;
 
 impl TagService {
+    pub async fn get_all_tags(
+        db: &DatabaseConnection,
+    ) -> Result<Vec<TagResponse>, AppError> {
+        let tags = tag::Entity::find()
+            .all(db)
+            .await?;
+
+        let tag_responses = tags.into_iter().map(|tag| TagResponse {
+            id: tag.id,
+            name: tag.name,
+            description: tag.description,
+            color: tag.color,
+            post_count: tag.post_count,
+            created_at: tag.created_at,
+            updated_at: tag.updated_at,
+        }).collect();
+
+        Ok(tag_responses)
+    }
+
     /// 取得標籤列表
     pub async fn get_tags(
         db: &DatabaseConnection,

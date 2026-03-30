@@ -5,13 +5,11 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use tracing::{debug, info};
 use validator::Validate;
 
 use crate::{
-    dtos::{CreatePostRequest, PostListQuery, PostListResponse, PostResponse, UpdatePostRequest, PostDetailResponse, DeletePostResponse},
-    error::AppError,
-    services::PostService,
-    state::AppState,
+    cache::PostCache, dtos::{CreatePostRequest, DeletePostResponse, PostDetailResponse, PostListQuery, PostListResponse, PostResponse, UpdatePostRequest}, error::AppError, services::PostService, state::AppState
 };
 
 pub fn create_post_routes() -> Router<AppState> {
@@ -39,7 +37,27 @@ pub async fn get_posts(
     State(app_state): State<AppState>,
     Query(query): Query<PostListQuery>,
 ) -> Result<Json<Vec<PostListResponse>>, AppError> {
+    // 產生快取鍵
+    let cache_key = PostCache::generate_list_cache_key(
+        query.page,
+        query.page_size,
+        query.tag.as_deref(),
+    );
+
+    // 先嘗試從快取取得
+    if let Some(cached_posts) = app_state.post_cache.get_post_list(&cache_key).await {
+        debug!("✅ 文章列表快取命中：{}", cache_key);
+        return Ok(Json(cached_posts));
+    }
+
+    // 快取未命中，從資料庫查詢
+    debug!("❌ 文章列表快取未命中，查詢資料庫：{}", cache_key);
     let posts = PostService::get_published_posts(&app_state.db, query).await?;
+
+    // 將結果存入快取
+    app_state.post_cache.cache_post_list(cache_key.clone(), posts.clone()).await;
+    debug!("💾 文章列表已快取：{}", cache_key);
+
     Ok(Json(posts))
 }
 
@@ -58,18 +76,39 @@ pub async fn get_posts(
 )]
 pub async fn get_post_by_slug(
     State(app_state): State<AppState>,
-    Path(identifier): Path<String>,
+    Path(slug): Path<String>,
 ) -> Result<Json<PostDetailResponse>, AppError> {
-    if let Ok(post) = PostService::get_post_by_slug_or_id(&app_state.db, &identifier).await {
-        let db = app_state.db.clone();
-        let post_id = post.id;
+    // 先嘗試從快取取得
+    if let Some(cached_post) = app_state.post_cache.get_post_detail(&slug).await {
+        debug!("✅ 文章詳情快取命中：{}", slug);
+        
+        // 非同步更新瀏覽次數（不阻塞回應）
+        let db_clone = app_state.db.clone();
+        let post_id = cached_post.id;
         tokio::spawn(async move {
-            let _ = PostService::increment_view_count(&db, post_id).await;
+            let _ = PostService::increment_view_count(&db_clone, post_id).await;
         });
-        Ok(Json(post))
-    } else {
-        Err(AppError::NotFound("文章不存在".to_string()))
+        
+        return Ok(Json(cached_post));
     }
+
+    // 快取未命中，從資料庫查詢
+    debug!("❌ 文章詳情快取未命中，查詢資料庫：{}", slug);
+    
+    let post = PostService::get_post_by_slug_or_id(&app_state.db, &slug).await?;
+    
+    // 非同步更新瀏覽次數
+    let db_clone = app_state.db.clone();
+    let post_id = post.id;
+    tokio::spawn(async move {
+        let _ = PostService::increment_view_count(&db_clone, post_id).await;
+    });
+    
+    // 將結果存入快取
+    app_state.post_cache.cache_post_detail(slug.clone(), post.clone()).await;
+    debug!("💾 文章詳情已快取：{}", slug);
+
+    Ok(Json(post))
 }
 
 #[utoipa::path(
@@ -86,9 +125,17 @@ pub async fn get_post_by_slug(
 pub async fn create_post(
     State(app_state): State<AppState>,
     Json(req): Json<CreatePostRequest>,
-) -> Result<(StatusCode, Json<PostResponse>), AppError> {
+) -> Result<(StatusCode, Json<crate::dtos::PostResponse>), AppError> {
     req.validate().map_err(|e| AppError::ValidationError(e.to_string()))?;
+    
     let post = PostService::create_post(&app_state.db, req).await?;
+    
+    // 新增文章後清理相關快取
+    app_state.post_cache.invalidate_all().await;
+    app_state.tag_cache.invalidate_all().await;
+    
+    info!("📝 文章建立成功，已清理相關快取");
+    
     Ok((StatusCode::CREATED, Json(post)))
 }
 
@@ -129,8 +176,22 @@ pub async fn update_post(
     Json(req): Json<UpdatePostRequest>,
 ) -> Result<Json<PostDetailResponse>, AppError> {
     req.validate().map_err(|e| AppError::ValidationError(e.to_string()))?;
-    let post = PostService::update_post(&app_state.db, id, req).await?;
-    Ok(Json(post))
+    
+    // 先獲取舊文章資訊以便清理快取
+    let old_post = PostService::get_post_for_admin(&app_state.db, id).await?;
+    
+    let updated_post = PostService::update_post(&app_state.db, id, req).await?;
+    
+    // 清理相關快取
+    app_state.post_cache.invalidate_post(&old_post.slug).await;
+    if old_post.slug != updated_post.slug {
+        app_state.post_cache.invalidate_post(&updated_post.slug).await;
+    }
+    app_state.tag_cache.invalidate_all().await;
+    
+    info!("✏️ 文章更新成功，已清理相關快取");
+    
+    Ok(Json(updated_post))
 }
 
 #[utoipa::path(
@@ -146,7 +207,17 @@ pub async fn update_post(
 pub async fn delete_post(
     State(app_state): State<AppState>,
     Path(id): Path<i32>,
-) -> Result<Json<DeletePostResponse>, AppError> {
+) -> Result<Json<crate::dtos::DeletePostResponse>, AppError> {
+    // 先獲取文章資訊以便清理快取
+    let post = PostService::get_post_for_admin(&app_state.db, id).await?;
+    
     let result = PostService::delete_post(&app_state.db, id).await?;
+    
+    // 清理相關快取
+    app_state.post_cache.invalidate_post(&post.slug).await;
+    app_state.tag_cache.invalidate_all().await;
+    
+    info!("🗑️ 文章刪除成功，已清理相關快取");
+    
     Ok(Json(result))
 }

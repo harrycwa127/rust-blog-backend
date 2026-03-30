@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use validator::Validate;
+use tracing::debug;
 
 use crate::{
     dtos::{
@@ -41,9 +42,21 @@ pub fn create_tag_routes() -> Router<AppState> {
 )]
 pub async fn get_tags(
     State(app_state): State<AppState>,
-    Query(query): Query<TagListQuery>,
 ) -> Result<Json<Vec<TagResponse>>, AppError> {
-    let tags = TagService::get_tags(&app_state.db, query).await?;
+    // 先嘗試從快取取得
+    if let Some(cached_tags) = app_state.tag_cache.get_tags().await {
+        debug!("✅ 標籤列表快取命中");
+        return Ok(Json(cached_tags));
+    }
+
+    // 快取未命中，從資料庫查詢
+    debug!("❌ 標籤列表快取未命中，查詢資料庫");
+    let tags = TagService::get_all_tags(&app_state.db).await?;
+
+    // 將結果存入快取
+    app_state.tag_cache.cache_tags(tags.clone()).await;
+    debug!("💾 標籤列表已快取");
+
     Ok(Json(tags))
 }
 

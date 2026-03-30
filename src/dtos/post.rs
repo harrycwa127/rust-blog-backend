@@ -62,7 +62,7 @@ pub struct PostResponse {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct PostListResponse {
     #[schema(example = 1)]
     pub id: i32,
@@ -122,7 +122,7 @@ pub struct UpdatePostRequest {
     pub tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct PostDetailResponse {
     #[schema(example = 1)]
     pub id: i32,
