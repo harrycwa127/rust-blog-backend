@@ -22,6 +22,8 @@ pub enum AppError {
     ValidationError(String),
     #[error("資源衝突: {0}")]
     ConflictError(String),
+    #[error("禁止存取")]
+    Forbidden(String),
 }
 
 impl AppError {
@@ -34,6 +36,8 @@ impl AppError {
             AppError::Unauthorized          => (StatusCode::UNAUTHORIZED,           "未授權"),
             AppError::ValidationError(_)    => (StatusCode::UNPROCESSABLE_ENTITY,   "參數驗證失敗"),
             AppError::ConflictError(_)      => (StatusCode::CONFLICT,               "資源衝突"),
+            AppError::Forbidden(_)             => (StatusCode::FORBIDDEN,              "禁止存取"),
+
         }
     }
 
@@ -46,6 +50,7 @@ impl AppError {
             AppError::Unauthorized        => warn!("未授權的存取嘗試"),
             AppError::ValidationError(msg)=> warn!("驗證失敗: {msg}"),
             AppError::ConflictError(msg)  => warn!("資源衝突: {msg}"),
+            AppError::Forbidden(msg)             => warn!("禁止存取的嘗試"),
         }
     }
 }

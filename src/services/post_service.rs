@@ -1,5 +1,5 @@
 use crate::dtos::post::*;
-use crate::entities::{post, tag, post_tag};
+use crate::entities::{post, tag, post_tag, comment, CommentStatus};
 use crate::error::AppError;
 use migration::Expr;
 use sea_orm::*;
@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use validator::Validate;
 use tracing::{info, error};
 use sea_orm::ActiveValue::{Set, NotSet};
+use std::fmt;
+use sea_orm::sea_query::Query;
 
 pub struct PostService;
 
@@ -46,8 +48,9 @@ impl PostService {
             None
         };
 
+        let txn = db.begin().await?;
+
         let mut post_active_model = post::ActiveModel::new();
-        post_active_model.id = NotSet;
         post_active_model.title = Set(req.title);
         post_active_model.content = Set(req.content);
         post_active_model.excerpt = Set(excerpt);
@@ -56,23 +59,26 @@ impl PostService {
         post_active_model.published_at = Set(published_at);
 
         let post_result = post::Entity::insert(post_active_model)
-            .exec_with_returning(db)
+            .exec_with_returning(&txn)
             .await
             .map_err(|e| {
                 error!("insert post failed: {e:#?}");
                 AppError::from(e)
             })?;
 
-        let mut tag_names = Vec::new();
+        let mut tag_names: Vec<String> = Vec::new();
         if let Some(tags) = req.tags {
             for tag_name in tags {
                 let name = tag_name.trim();
                 if name.is_empty() { continue; }
-
-                Self::create_or_update_tag(db, name, post_result.id).await?;
+                Self::create_or_update_tag_txn(&txn, name, post_result.id).await?;
                 tag_names.push(name.to_string());
             }
         }
+
+        Self::sync_tag_counts_for_post(&txn, vec![], tag_names.clone()).await?;
+
+        txn.commit().await?;
 
         Ok(PostResponse {
             id: post_result.id,
@@ -166,40 +172,6 @@ impl PostService {
         }
     }
 
-    /// 創建或更新標籤
-    async fn create_or_update_tag(
-        db: &DatabaseConnection,
-        tag_name: &str,
-        post_id: i32,
-    ) -> Result<(), AppError> {
-        let maybe_tag = tag::Entity::find()
-            .filter(tag::Column::Name.eq(tag_name))
-            .one(db)
-            .await?;
-
-        let tag_model = if let Some(existing) = maybe_tag {
-            let mut active: tag::ActiveModel = existing.clone().into();
-            active.post_count = Set(existing.post_count + 1);
-            tag::Entity::update(active).exec(db).await?
-        } else {
-            let mut new_tag = tag::ActiveModel::new();
-            new_tag.id = NotSet; // 視你的 schema 而定
-            new_tag.name = Set(tag_name.to_string());
-            new_tag.color = Set(Self::generate_tag_color(tag_name));
-            new_tag.post_count = Set(1);
-            tag::Entity::insert(new_tag)
-                .exec_with_returning(db)
-                .await?
-        };
-        
-        let mut pt = post_tag::ActiveModel::new();
-        pt.post_id = Set(post_id);
-        pt.tag_id = Set(tag_model.id);
-        post_tag::Entity::insert(pt).exec(db).await?;
-
-        Ok(())
-    }
-
     /// 批量取得文章的標籤
     async fn get_tags_for_posts(
         db: &DatabaseConnection,
@@ -235,7 +207,6 @@ impl PostService {
         colors[index].to_string()
     }
 
-    /// 根據 slug 或 id 取得單篇文章詳情
     pub async fn get_post_by_slug_or_id(
         db: &DatabaseConnection,
         identifier: &str,
@@ -373,28 +344,38 @@ impl PostService {
         // 開始交易
         let txn = db.begin().await?;
 
-        // 更新文章
-        let updated = updated_post.update(&txn).await.map_err(|e| {
-            error!("更新文章失敗: {e:#?}");
-            AppError::from(e)
-        })?;
-
-        // 更新標籤關聯
         if let Some(tags) = req.tags {
-            // 刪除現有標籤關聯
+
+            let old_tags: Vec<String> = post_tag::Entity::find()
+                .filter(post_tag::Column::PostId.eq(post_id))
+                .find_also_related(tag::Entity)
+                .all(&txn)
+                .await?
+                .into_iter()
+                .filter_map(|(_, t)| t.map(|x| x.name))
+                .collect();
+
             post_tag::Entity::delete_many()
                 .filter(post_tag::Column::PostId.eq(post_id))
                 .exec(&txn)
                 .await?;
 
-            // 重新建立標籤關聯
+            let mut new_tags: Vec<String> = Vec::new();
             for tag_name in tags {
                 let name = tag_name.trim();
                 if name.is_empty() { continue; }
-
                 Self::create_or_update_tag_txn(&txn, name, post_id).await?;
+                new_tags.push(name.to_string());
             }
+
+            Self::sync_tag_counts_for_post(&txn, old_tags, new_tags).await?;
         }
+
+        // 更新文章
+        let updated = updated_post.update(&txn).await.map_err(|e| {
+            error!("更新文章失敗: {e:#?}");
+            AppError::from(e)
+        })?;
 
         txn.commit().await?;
 
@@ -426,19 +407,27 @@ impl PostService {
             .await?
             .ok_or_else(|| AppError::NotFound("文章不存在".to_string()))?;
 
-        // 開始交易
         let txn = db.begin().await?;
 
-        // 刪除標籤關聯
+        let old_tags: Vec<String> = post_tag::Entity::find()
+            .filter(post_tag::Column::PostId.eq(post_id))
+            .find_also_related(tag::Entity)
+            .all(&txn)
+            .await?
+            .into_iter()
+            .filter_map(|(_, t)| t.map(|x| x.name))
+            .collect();
+
+        // ❷ 刪除關聯與文章
         post_tag::Entity::delete_many()
             .filter(post_tag::Column::PostId.eq(post_id))
             .exec(&txn)
             .await?;
 
-        // 刪除文章
-        post::Entity::delete_by_id(post_id)
-            .exec(&txn)
-            .await?;
+        post::Entity::delete_by_id(post_id).exec(&txn).await?;
+
+        // ❸ 同步計數：old=old_tags，new=[]
+        Self::sync_tag_counts_for_post(&txn, old_tags, vec![]).await?;
 
         txn.commit().await?;
 
@@ -450,6 +439,7 @@ impl PostService {
             deleted_id: post_id,
         })
     }
+
 
     /// 增加文章瀏覽次數
     pub async fn increment_view_count(
@@ -514,7 +504,6 @@ impl PostService {
             }
         };
 
-        // 建立文章-標籤關聯
         let post_tag_relation = post_tag::ActiveModel {
             post_id: Set(post_id),
             tag_id: Set(tag_entity.id),
@@ -525,16 +514,11 @@ impl PostService {
         Ok(())
     }
 
-    /// 更新文章時同步更新標籤計數
     async fn sync_tag_counts_for_post(
         txn: &DatabaseTransaction,
-        post_id: i32,
         old_tags: Vec<String>,
         new_tags: Vec<String>,
     ) -> Result<(), AppError> {
-        use crate::services::TagService;
-        
-        // 找出被移除的標籤
         let removed_tags: Vec<_> = old_tags.iter()
             .filter(|tag| !new_tags.contains(tag))
             .collect();
@@ -584,6 +568,315 @@ impl PostService {
         Ok(())
     }
 
-    // 在 update_post、delete_post、create 方法中調用標籤計數同步
-    // 你需要在更新文章標籤前後記錄標籤變化，然後調用 sync_tag_counts_for_post
+    pub async fn search_posts(
+        db: &DatabaseConnection,
+        query: PostSearchQuery,
+        is_admin: bool,
+    ) -> Result<PostSearchResponse, AppError> {
+        let page = query.page.unwrap_or(1);
+        let page_size = query.page_size.unwrap_or(10).min(50); // 限制最大每頁數量
+        let offset = (page - 1) * page_size;
+
+        // 建立基本查詢
+        let mut select = post::Entity::find();
+
+        // 狀態篩選
+        match query.status.as_deref() {
+            Some("published") => {
+                select = select.filter(post::Column::IsPublished.eq(true));
+            },
+            Some("draft") => {
+                if is_admin {
+                    select = select.filter(post::Column::IsPublished.eq(false));
+                } else {
+                    return Err(AppError::Forbidden("無權限查看草稿".to_string()));
+                }
+            },
+            Some("all") => {
+                if !is_admin {
+                    select = select.filter(post::Column::IsPublished.eq(true));
+                }
+            },
+            _ => {
+                if !is_admin {
+                    select = select.filter(post::Column::IsPublished.eq(true));
+                }
+            }
+        }
+
+        // 關鍵字搜尋
+        let applied_keyword = if let Some(ref keyword) = query.q {
+            let search_term = format!("%{}%", keyword.trim());
+            select = select.filter(
+                Condition::any()
+                    .add(post::Column::Title.like(&search_term))
+                    .add(post::Column::Content.like(&search_term))
+                    .add(post::Column::Excerpt.like(&search_term))
+            );
+            Some(keyword.clone())
+        } else {
+            None
+        };
+
+        // 標籤篩選
+        let applied_tags = if let Some(ref tags_str) = query.tags {
+            let tag_names: Vec<&str> = tags_str.split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if !tag_names.is_empty() {
+                // 使用 EXISTS 子查詢來篩選包含指定標籤的文章
+                for tag_name in &tag_names {
+                    select = select.filter(
+                        Expr::exists(
+                            Query::select()
+                                .column(post_tag::Column::PostId)
+                                .from(post_tag::Entity)
+                                .inner_join(
+                                    tag::Entity,
+                                    Expr::col((tag::Entity, tag::Column::Id))
+                                        .equals((post_tag::Entity, post_tag::Column::TagId))
+                                )
+                                .and_where(
+                                    Expr::col((post_tag::Entity, post_tag::Column::PostId))
+                                        .equals((post::Entity, post::Column::Id))
+                                )
+                                .and_where(
+                                    Expr::col((tag::Entity, tag::Column::Name))
+                                        .eq(*tag_name)
+                                )
+                                .take()
+                        )
+                    );
+                }
+                tag_names.into_iter().map(|s| s.to_string()).collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // 日期範圍篩選
+        let (date_start, date_end) = if let (Some(from), Some(to)) = (&query.from_date, &query.to_date) {
+            if let (Ok(start_date), Ok(end_date)) = (
+                chrono::NaiveDate::parse_from_str(from, "%Y-%m-%d"),
+                chrono::NaiveDate::parse_from_str(to, "%Y-%m-%d")
+            ) {
+                let start_datetime = start_date.and_hms_opt(0, 0, 0)
+                    .ok_or_else(|| AppError::BadRequest("無效的開始日期".to_string()))?
+                    .and_utc();
+                let end_datetime = end_date.and_hms_opt(23, 59, 59)
+                    .ok_or_else(|| AppError::BadRequest("無效的結束日期".to_string()))?
+                    .and_utc();
+
+                select = select.filter(
+                    post::Column::CreatedAt.between(start_datetime, end_datetime)
+                );
+
+                (Some(from.clone()), Some(to.clone()))
+            } else {
+                return Err(AppError::BadRequest("日期格式錯誤，請使用 YYYY-MM-DD 格式".to_string()));
+            }
+        } else {
+            (None, None)
+        };
+
+        // 排序
+        let sort_by = query.sort_by.as_deref().unwrap_or("created_at");
+        let sort_order = query.sort_order.as_deref().unwrap_or("desc");
+
+        select = match (sort_by, sort_order) {
+            ("title", "desc") => select.order_by_desc(post::Column::Title),
+            ("title", _) => select.order_by_asc(post::Column::Title),
+            ("updated_at", "asc") => select.order_by_asc(post::Column::UpdatedAt),
+            ("updated_at", _) => select.order_by_desc(post::Column::UpdatedAt),
+            ("view_count", "asc") => select.order_by_asc(post::Column::ViewCount),
+            ("view_count", _) => select.order_by_desc(post::Column::ViewCount),
+            ("created_at", "asc") => select.order_by_asc(post::Column::CreatedAt),
+            _ => select.order_by_desc(post::Column::CreatedAt),
+        };
+
+        // 計算總數
+        let total_count = select.clone().count(db).await?;
+        let total_pages = (total_count + page_size - 1) / page_size;
+
+        // 執行分頁查詢
+        let posts = select
+            .offset(offset)
+            .limit(page_size)
+            .all(db)
+            .await?;
+
+        // 取得文章的標籤和留言數
+        let mut post_responses = Vec::new();
+        for post in posts {
+            let tags = Self::get_tags_for_post(db, post.id).await?
+                .into_iter()
+                .map(|tag_name| TagSummaryResponse {
+                    id: 0, 
+                    name: tag_name.clone(),
+                    color: Self::generate_tag_color(&tag_name),
+                })
+                .collect();
+
+            // 計算留言數（只計算已審核的）
+            let comment_count = comment::Entity::find()
+                .filter(comment::Column::PostId.eq(post.id))
+                .filter(comment::Column::Status.eq(CommentStatus::Approved))
+                .count(db)
+                .await? as i32;
+
+            post_responses.push(PostSummaryResponse {
+                id: post.id,
+                title: post.title,
+                excerpt: post.excerpt,
+                slug: post.slug,
+                is_published: post.is_published,
+                view_count: post.view_count,
+                created_at: post.created_at,
+                updated_at: post.updated_at,
+                published_at: post.published_at,
+                tags,
+                comment_count,
+            });
+        }
+
+        // 產生搜尋摘要
+        let search_summary = Self::generate_search_summary(
+            total_count,
+            &applied_keyword,
+            &applied_tags,
+            &date_start,
+            &date_end,
+        );
+
+        Ok(PostSearchResponse {
+            total_count: total_count as i64,
+            total_pages,
+            current_page: page,
+            page_size,
+            posts: post_responses,
+            search_summary,
+            filters_applied: SearchFiltersApplied {
+                keyword: applied_keyword,
+                tags: applied_tags,
+                status: query.status,
+                date_range_start: date_start,
+                date_range_end: date_end,
+            },
+        })
+    }
+
+    /// 取得熱門搜尋與建議
+    pub async fn get_popular_search_data(
+        db: &DatabaseConnection,
+    ) -> Result<PopularSearchResponse, AppError> {
+        // 取得熱門標籤（按文章數排序）
+        let popular_tags = tag::Entity::find()
+            .filter(tag::Column::PostCount.gt(0))
+            .order_by_desc(tag::Column::PostCount)
+            .limit(10)
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|tag| tag.name)
+            .collect();
+
+        // 取得最近發布的文章
+        let recent_posts = post::Entity::find()
+            .filter(post::Column::IsPublished.eq(true))
+            .order_by_desc(post::Column::PublishedAt)
+            .limit(5)
+            .all(db)
+            .await?;
+
+        let mut recent_post_responses = Vec::new();
+        for post in recent_posts {
+            let tags = Self::get_tags_for_post(db, post.id).await?
+                .into_iter()
+                .map(|tag_name| TagSummaryResponse {
+                    id: 0,
+                    name: tag_name.clone(),
+                    color: Self::generate_tag_color(&tag_name),
+                })
+                .collect();
+
+            let comment_count = comment::Entity::find()
+                .filter(comment::Column::PostId.eq(post.id))
+                .filter(comment::Column::Status.eq(CommentStatus::Approved))
+                .count(db)
+                .await? as i32;
+
+            recent_post_responses.push(PostSummaryResponse {
+                id: post.id,
+                title: post.title,
+                excerpt: post.excerpt,
+                slug: post.slug,
+                is_published: post.is_published,
+                view_count: post.view_count,
+                created_at: post.created_at,
+                updated_at: post.updated_at,
+                published_at: post.published_at,
+                tags,
+                comment_count,
+            });
+        }
+
+        // 搜尋建議（基於文章標題的常見關鍵字）
+        let search_suggestions = vec![
+            "Rust".to_string(),
+            "程式設計".to_string(),
+            "Web 開發".to_string(),
+            "後端".to_string(),
+            "教學".to_string(),
+        ];
+
+        // 統計資料
+        let total_posts = post::Entity::find().count(db).await? as i64;
+        let total_published = post::Entity::find()
+            .filter(post::Column::IsPublished.eq(true))
+            .count(db)
+            .await? as i64;
+
+        Ok(PopularSearchResponse {
+            popular_tags,
+            recent_posts: recent_post_responses,
+            search_suggestions,
+            total_posts,
+            total_published,
+        })
+    }
+
+    /// 產生搜尋摘要文字
+    fn generate_search_summary(
+        total_count: u64,
+        keyword: &Option<String>,
+        tags: &[String],
+        date_start: &Option<String>,
+        date_end: &Option<String>,
+    ) -> String {
+        let mut parts = Vec::new();
+
+        parts.push(format!("找到 {} 篇文章", total_count));
+
+        if let Some(kw) = keyword {
+            parts.push(format!("包含關鍵字 '{}'", kw));
+        }
+
+        if !tags.is_empty() {
+            if tags.len() == 1 {
+                parts.push(format!("標籤為 '{}'", tags[0]));
+            } else {
+                parts.push(format!("標籤包含 {}", tags.join(", ")));
+            }
+        }
+
+        if let (Some(start), Some(end)) = (date_start, date_end) {
+            parts.push(format!("發布日期在 {} 到 {} 之間", start, end));
+        }
+
+        parts.join("，")
+    }
 }
