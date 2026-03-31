@@ -9,7 +9,7 @@ use tracing::{debug, info};
 use validator::Validate;
 
 use crate::{
-    cache::PostCache, dtos::{CreatePostRequest, DeletePostResponse, PostDetailResponse, PostListQuery, PostListResponse, PostResponse, UpdatePostRequest}, error::AppError, services::PostService, state::AppState
+    cache::PostCache, dtos::{CreatePostRequest, DeletePostResponse, PostDetailResponse, PostListQuery, PostListResponse, PostResponse, PostSearchQuery, PostSearchResponse, UpdatePostRequest}, error::AppError, services::PostService, state::AppState
 };
 
 pub fn create_post_routes() -> Router<AppState> {
@@ -221,4 +221,25 @@ pub async fn delete_post(
     info!("🗑️ 文章刪除成功，已清理相關快取");
     
     Ok(Json(result))
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/posts/search",
+    tag = "admin",
+    params(
+        ("q" = String, Query, description = "搜索關鍵字")
+    ),
+    responses(
+        (status = 200, description = "搜索結果", body = PostSearchResponse),
+        (status = 403, description = "無權限查看草稿"),
+        (status = 400, description = "無效的日期")
+    )
+)]
+pub async fn admin_search_posts(
+    State(app_state): State<AppState>,
+    Query(params): Query<PostSearchQuery>,
+) -> Result<Json<PostSearchResponse>, AppError> {
+    let posts = PostService::search_posts(&app_state.db, params, true).await?;
+    Ok(Json(posts))
 }

@@ -1,7 +1,7 @@
 use sea_orm::DatabaseConnection;
 use crate::cache::CacheConfig;
-use crate::cache::post::PostCache;
-use crate::cache::tag::TagCache;
+use crate::cache::post_cache::PostCache;
+use crate::cache::tag_cache::TagCache;
 use crate::config::Config;
 use crate::auth::JwtService;
 

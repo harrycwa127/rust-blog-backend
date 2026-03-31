@@ -10,8 +10,8 @@ use tracing::{error, warn};
 
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error("內部伺服器錯誤")]
-    InternalServerError,
+    #[error("內部伺服器錯誤: {0}")]
+    InternalServerError(String),
     #[error("找不到資源: {0}")]
     NotFound(String),
     #[error("請求無效: {0}")]
@@ -30,7 +30,7 @@ impl AppError {
     #[inline]
     fn status_and_client_msg(&self) -> (StatusCode, &'static str) {
         match self {
-            AppError::InternalServerError   => (StatusCode::INTERNAL_SERVER_ERROR, "內部伺服器錯誤"),
+            AppError::InternalServerError(_)   => (StatusCode::INTERNAL_SERVER_ERROR, "內部伺服器錯誤"),
             AppError::NotFound(_)           => (StatusCode::NOT_FOUND,              "找不到資源"),
             AppError::BadRequest(_)         => (StatusCode::BAD_REQUEST,            "請求無效"),
             AppError::Unauthorized(_)          => (StatusCode::UNAUTHORIZED,           "未授權"),
@@ -44,13 +44,13 @@ impl AppError {
     #[inline]
     fn log(&self) {
         match self {
-            AppError::InternalServerError => error!("內部伺服器錯誤"),
+            AppError::InternalServerError(msg) => error!("內部伺服器錯誤: {msg}"),
             AppError::NotFound(msg)       => warn!("資源未找到: {msg}"),
             AppError::BadRequest(msg)     => warn!("請求無效: {msg}"),
-            AppError::Unauthorized(msg)        => warn!("未授權的存取嘗試"),
+            AppError::Unauthorized(msg)        => warn!("未授權的存取嘗試: {msg}"),
             AppError::ValidationError(msg)=> warn!("驗證失敗: {msg}"),
             AppError::ConflictError(msg)  => warn!("資源衝突: {msg}"),
-            AppError::Forbidden(msg)             => warn!("禁止存取的嘗試"),
+            AppError::Forbidden(msg)             => warn!("禁止存取的嘗試: {msg}"),
         }
     }
 }
@@ -83,7 +83,7 @@ impl From<DbErr> for AppError {
                 "22001" => AppError::BadRequest("字串超過長度限制".into()),
                 _       => {
                     error!("未處理的 SQLSTATE: {code}");
-                    AppError::InternalServerError
+                    AppError::InternalServerError(format!("未處理的 SQLSTATE: {code}"))
                 }
             };
         }
@@ -98,7 +98,7 @@ impl From<DbErr> for AppError {
         }
 
         error!("資料庫錯誤: {err:#}");
-        AppError::InternalServerError
+        AppError::InternalServerError(format!("資料庫錯誤 {err:#}"))
     }
 }
 

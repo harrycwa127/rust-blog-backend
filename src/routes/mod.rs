@@ -1,6 +1,6 @@
 use axum::{routing::get, Router};
 use axum::routing::{delete, post, put};
-use crate::auth_handler::{admin_info, admin_login};
+use crate::auth_handlers::{admin_info, admin_login};
 use crate::auth_middleware::auth_middleware;
 use crate::state::AppState;
 

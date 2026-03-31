@@ -23,6 +23,7 @@ use database::establish_connection;
 use state::AppState;
 use std::time::Duration;
 use tracing::info;
+use auth::JwtService;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -48,8 +49,10 @@ async fn main() -> Result<()> {
     //     info!("資料庫遷移完成");
     // }
 
+    let jwtAuth = JwtService::new()?;
+
     // 建立應用程式狀態
-    let app_state = AppState::new(db, config.clone());
+    let app_state = AppState::new(db, config.clone(), jwtAuth);
 
     // 🆕 啟動快取維護任務
     start_cache_maintenance_task(app_state.clone());
