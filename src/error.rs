@@ -16,13 +16,13 @@ pub enum AppError {
     NotFound(String),
     #[error("請求無效: {0}")]
     BadRequest(String),
-    #[error("未授權")]
-    Unauthorized,
+    #[error("未授權: {0}")]
+    Unauthorized(String),
     #[error("參數驗證失敗: {0}")]
     ValidationError(String),
     #[error("資源衝突: {0}")]
     ConflictError(String),
-    #[error("禁止存取")]
+    #[error("禁止存取: {0}")]
     Forbidden(String),
 }
 
@@ -33,7 +33,7 @@ impl AppError {
             AppError::InternalServerError   => (StatusCode::INTERNAL_SERVER_ERROR, "內部伺服器錯誤"),
             AppError::NotFound(_)           => (StatusCode::NOT_FOUND,              "找不到資源"),
             AppError::BadRequest(_)         => (StatusCode::BAD_REQUEST,            "請求無效"),
-            AppError::Unauthorized          => (StatusCode::UNAUTHORIZED,           "未授權"),
+            AppError::Unauthorized(_)          => (StatusCode::UNAUTHORIZED,           "未授權"),
             AppError::ValidationError(_)    => (StatusCode::UNPROCESSABLE_ENTITY,   "參數驗證失敗"),
             AppError::ConflictError(_)      => (StatusCode::CONFLICT,               "資源衝突"),
             AppError::Forbidden(_)             => (StatusCode::FORBIDDEN,              "禁止存取"),
@@ -47,7 +47,7 @@ impl AppError {
             AppError::InternalServerError => error!("內部伺服器錯誤"),
             AppError::NotFound(msg)       => warn!("資源未找到: {msg}"),
             AppError::BadRequest(msg)     => warn!("請求無效: {msg}"),
-            AppError::Unauthorized        => warn!("未授權的存取嘗試"),
+            AppError::Unauthorized(msg)        => warn!("未授權的存取嘗試"),
             AppError::ValidationError(msg)=> warn!("驗證失敗: {msg}"),
             AppError::ConflictError(msg)  => warn!("資源衝突: {msg}"),
             AppError::Forbidden(msg)             => warn!("禁止存取的嘗試"),

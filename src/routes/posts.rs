@@ -115,6 +115,7 @@ pub async fn get_post_by_slug(
     post,
     path = "/posts",
     tag = "admin",
+    security(("bearer_auth" = [])), // 像這樣加上安全性標註
     request_body = CreatePostRequest,
     responses(
         (status = 201, description = "文章建立成功", body = PostResponse),
