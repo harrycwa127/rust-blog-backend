@@ -33,13 +33,13 @@ impl TagCache {
         self.cache.invalidate_all();
     }
 
-    /// 取得快取統計
+    /// 取得快取統計（moka.futures 沒有公開命中計數 API，暫時只提供項目數）
     pub fn stats(&self) -> CacheStats {
         CacheStats {
             entry_count: self.cache.entry_count(),
-            hit_count: self.cache.hit_count(),
-            miss_count: self.cache.miss_count(),
-            hit_rate: self.cache.hit_rate(),
+            hit_count: 0,
+            miss_count: 0,
+            hit_rate: 0.0,
         }
     }
 
