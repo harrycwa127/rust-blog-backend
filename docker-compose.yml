@@ -1,0 +1,93 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: blog-postgres
+    environment:
+      POSTGRES_DB: personal_blog
+      POSTGRES_USER: blog_user
+      POSTGRES_PASSWORD: blog_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - blog-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blog_user -d personal_blog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c log_statement=all
+      -c log_min_duration_statement=0
+      -c shared_preload_libraries=pg_stat_statements
+
+  # Rust Backend
+  backend:
+    build:
+      context: ./blog-backend
+      dockerfile: Dockerfile
+    container_name: blog-backend
+    env_file:
+      - ./blog-backend/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3000
+      - PROTOCOL=http
+      - BLOG_NAME=我的個人技術部落格
+      - BLOG_DESCRIPTION=分享程式設計學習心得與生活感悟
+      - BLOG_AUTHOR=哈囉你好嗎
+      - DATABASE_URL=postgres://blog_user:blog_password@postgres:5432/personal_blog
+      - DATABASE_MAX_CONNECTIONS=10
+      - RUST_LOG=info
+      - CORS_ORIGIN=http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://localhost
+      - JWT_SECRET=blog_secret_key
+      - JWT_EXPIRY_HOURS=24
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+      - CORS_ORIGINS=http://localhost,http://localhost:80,http://localhost:3000,http://localhost:5173,http://localhost:5174,http://127.0.0.1:3000
+      - ENVIRONMENT=production
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - blog-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./blog-frontend
+      dockerfile: Dockerfile
+    container_name: blog-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - blog-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    external: true
+    name: blog-backend_postgres_data
+
+networks:
+  blog-network:
+    driver: bridge
